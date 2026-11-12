@@ -81,7 +81,7 @@
       if(!data?.token)throw Error('無法取得團體 QR Code');
       const url=new URL(location.href);url.search='';url.hash='';
       url.searchParams.set('checkin',data.token);
-      url.searchParams.set('endpoint',endpoint(localStorage.getItem('calm_supabase_url')||''));
+      url.searchParams.set('endpoint',endpoint((typeof getUrl==='function'&&getUrl())||(typeof db!=='undefined'&&db&&db.supabaseUrl)||localStorage.getItem('calm_supabase_url')||''));
       currentLink=url.href;
       const area=$('qrCards');area.replaceChildren();
       const h=document.createElement('h3');h.textContent=data.group_name||'CALM CLUB';area.append(h);
