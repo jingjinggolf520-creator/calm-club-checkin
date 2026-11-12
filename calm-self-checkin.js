@@ -1,127 +1,113 @@
-/* CALM CLUB mobile-first staff scanning and one QR code per traveler.
-   Uses existing authenticated main Supabase client and existing traveler qr_token.
-   Legacy group QR entry is preserved for previously issued group codes. */
+
+/* CALM CLUB｜一團一碼：旅客只選團、填姓名 */
 (() => {
   const $=id=>document.getElementById(id);
   const params=new URLSearchParams(location.search),token=params.get('checkin');
   const key=typeof PUBLIC_KEY==='string'?PUBLIC_KEY:'';
-  const say=(s,ok=false)=>{const e=$('calmGuestMessage');if(e){e.textContent=s;e.style.color=ok?'#267548':'#aa443b';}};
-  const endpoint=s=>{const u=new URL(s);if(u.protocol!=='https:'||!u.hostname.endsWith('.supabase.co'))throw Error('雲端網址不正確');return u.origin;};
+  const say=(s,good=false)=>{const e=$('calmGuestMessage');if(e){e.textContent=s;e.style.color=good?'#267548':'#aa443b';}};
+  const endpoint=s=>{const u=new URL(s);if(u.protocol!=='https:'||!u.hostname.endsWith('.supabase.co'))throw Error('雲端連線網址不正確');return u.origin;};
   if(token){
     ['setupPanel','loginPanel','userPanel','app','topNotice'].forEach(id=>$(id)?.classList.add('hidden'));
     $('calmGuestPanel')?.classList.remove('hidden');
-    const button=$('calmGuestSubmit');button.disabled=true;let client;
-    (async()=>{try{
-      const url=params.get('endpoint')||(typeof getUrl==='function'?getUrl():'');
-      client=window.supabase.createClient(endpoint(url),key,{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
-      const {data,error}=await client.rpc('calm_guest_info',{p_token:token});
-      if(error)throw error;if(!data?.ok)throw Error(data?.message||'QR Code 無效');
-      const select=$('calmGuestGroup');select.replaceChildren();const option=document.createElement('option');option.value=data.group_id;option.textContent=data.group_name||'CALM CLUB';select.append(option);
-      if(data.open_count===1){button.disabled=false;say('請輸入姓名後按確認報到。',true);}
-      else say(data.open_count===0?'目前沒有開放報到的活動。':'目前有多場活動開放，請聯絡領隊。');
-    }catch(e){say('無法載入報到資訊：'+e.message);}})();
-    button.onclick=async()=>{const name=$('calmGuestName').value.trim().replace(/\s+/g,'');if(!name)return say('請輸入完整中文姓名。');button.disabled=true;
-      try{const {data,error}=await client.rpc('calm_guest_checkin_name',{p_token:token,p_name:name});if(error)throw error;say(data?.message||'報到失敗',!!data?.ok);if(data?.ok){button.textContent='報到完成';return;}}
-      catch(e){say('報到失敗：'+e.message);}finally{if(button.textContent!=='報到完成')button.disabled=false;}
+    const button=$('calmGuestSubmit');button.disabled=true;
+    let client;
+    (async()=>{
+      try{
+        client=window.supabase.createClient(endpoint(params.get('endpoint')) ,key,{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
+        const {data,error}=await client.rpc('calm_guest_info',{p_token:token});
+        if(error)throw error;
+        if(!data?.ok)throw Error(data?.message||'QR Code 無效');
+        const selector=$('calmGuestGroup');selector.replaceChildren();
+        const opt=document.createElement('option');opt.value=data.group_id;opt.textContent=data.group_name||'CALM CLUB';selector.append(opt);
+        if(data.open_count===1){button.disabled=false;say('請輸入姓名後按「確認報到」。',true);}
+        else if(data.open_count===0)say('目前沒有開放報到的活動，請等待領隊開始報到。');
+        else say('目前有多場活動同時開放，請通知領隊先保留一場開放報到。');
+      }catch(e){say('無法載入報到資訊：'+e.message);}
+    })();
+    button.onclick=async()=>{
+      const name=$('calmGuestName').value.trim().replace(/\s+/g,'');
+      if(!name)return say('請輸入完整中文姓名。');
+      button.disabled=true;
+      try{
+        const {data,error}=await client.rpc('calm_guest_checkin_name',{p_token:token,p_name:name});
+        if(error)throw error;
+        say(data?.message||'報到失敗',!!data?.ok);
+        if(data?.ok){button.textContent='報到完成';return;}
+      }catch(e){say('報到失敗：'+e.message);}finally{if(button.textContent!=='報到完成')button.disabled=false;}
     };
     return;
   }
-  const qrPane=$('qrPane'),scanPane=$('scanPane');
-  const qrHeading=qrPane?.querySelector('h2');
-  if(qrHeading)qrHeading.textContent='旅客專屬 QR Code';
-  const qrIntro=qrPane?.querySelector('p.muted');
-  if(qrIntro)qrIntro.textContent='每位旅客一個專屬 QR Code，整趟旅程可重複使用；由領隊或導遊使用手機掃描報到。';
-  const qrArea=$('qrCards');
-  if(qrArea){qrArea.style.cssText='display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px;text-align:center';}
-  const qrStatus=msg=>{if($('groupQrStatus'))$('groupQrStatus').textContent=msg;};
-  const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const canvasQR=(canvas,value,size=260)=>new Promise((resolve,reject)=>{
-    if(!window.QRCode?.toCanvas)return reject(Error('QR Code 元件未載入，請確認網路'));
-    window.QRCode.toCanvas(canvas,value,{width:size,margin:3},e=>e?reject(e):resolve());
+  let currentLink='';
+  let currentCanvas=null;
+  let currentGroupName='CALM CLUB';
+  const qrStatus=message=>{if($('groupQrStatus'))$('groupQrStatus').textContent=message;};
+  const qrFileName=()=>((currentGroupName||'CALM_CLUB').replace(/[\\/:*?"<>|\x00-\x1f]/g,'_').slice(0,65)||'CALM_CLUB')+'_QR_Code.png';
+  const renderQr=(canvas,link)=>new Promise((resolve,reject)=>{
+    if(!window.QRCode||typeof QRCode.toCanvas!=='function')return reject(Error('QR Code 圖片元件未載入，請重新整理網頁'));
+    QRCode.toCanvas(canvas,link,{width:320,margin:3},err=>err?reject(err):resolve());
   });
-  const nameOf=t=>String(t.traveler_name||t.name||'');
-  let lastKey='',currentQrs=[];
-  async function showQrs(){
-    if(typeof db==='undefined'||!db||!groupId){qrStatus('請先登入並選擇團體');return;}
-    const list=Array.isArray(travelers)?travelers:[];
-    const group=(typeof getGroup==='function'&&getGroup())||{};
-    const groupName=group.group_name||group.name||group.tour_name||'CALM CLUB';
-    qrArea.replaceChildren();currentQrs=[];
-    if(!list.length){qrStatus('目前沒有旅客，請先匯入名單');return;}
-    qrStatus('正在產生 '+list.length+' 位旅客的 QR Code…');
-    const fragment=document.createDocumentFragment();
-    for(const p of list){
-      const card=document.createElement('div');card.className='qritem';card.style.cssText='padding:12px;border:1px solid #d6c399;border-radius:12px;break-inside:avoid;background:#fff';
-      const heading=document.createElement('div');heading.innerHTML='<strong>'+esc(p.traveler_no||'')+' '+esc(nameOf(p))+'</strong><small style="display:block">'+esc(p.bus_no||p.bus||'')+'</small>';
-      card.append(heading);
-      const canvas=document.createElement('canvas');canvas.style.display='none';card.append(canvas);const preview=document.createElement('img');preview.alt='旅客專屬 QR Code';preview.style.cssText='display:block;width:220px;max-width:100%;height:auto;margin:8px auto';card.append(preview);
-      if(!p.qr_token){const warn=document.createElement('p');warn.textContent='缺少旅客 QR 識別碼，請聯絡管理員';card.append(warn);fragment.append(card);continue;}
-      const payload=JSON.stringify({token:p.qr_token,group_id:groupId});
-      try{await canvasQR(canvas,payload,220);preview.src=canvas.toDataURL('image/png');}catch(e){const err=document.createElement('p');err.textContent=e.message;card.append(err);}
-      const download=document.createElement('button');download.type='button';download.className='secondary noprint';download.textContent='儲存此旅客 QR';
-      download.onclick=()=>saveImage(canvas,groupName+'_'+(p.traveler_no||'')+'_'+nameOf(p)+'.png');
-      card.append(download);currentQrs.push({canvas,p});fragment.append(card);
-    }
-    qrArea.append(fragment);
-    qrStatus('已產生 '+currentQrs.length+' 位旅客專屬 QR Code。');
-  }
-  function saveImage(canvas,filename){
-    const image=canvas.toDataURL('image/png');
-    const a=document.createElement('a');a.href=image;a.download=filename.replace(/[\\/:*?"<>|]/g,'_');document.body.append(a);a.click();a.remove();
-    if(/iPhone|iPad|iPod/.test(navigator.userAgent))qrStatus('iPhone 若未自動儲存，可長按 QR 圖片儲存；也可用分享功能。');
-  }
-  $('makeGroupQr')?.addEventListener('click',showQrs);
-  if($('makeGroupQr'))$('makeGroupQr').textContent='產生／顯示全團旅客 QR Code';
-  if($('copyGroupLink'))$('copyGroupLink').style.display='none';
-  if($('downloadGroupQr')){$('downloadGroupQr').disabled=true;$('downloadGroupQr').style.display='none';}
-  // Turn the existing hidden scanner area into a mobile-friendly camera scanner.
-  const reader=$('reader'),start=$('startScan'),stop=$('stopScan'),result=$('scanResult');
-  const hiddenContainer=start?.parentElement;
-  if(hiddenContainer){hiddenContainer.style.display='block';}
-  if(start){start.style.display='inline-block';start.textContent='開啟手機相機掃描';}
-  if(stop){stop.style.display='inline-block';stop.textContent='停止掃描';}
-  if(reader){reader.style.maxWidth='100%';reader.style.width='100%';}
-  if(scanPane){
-    const tip=document.createElement('p');tip.className='muted';tip.textContent='請由工作人員掃描旅客的專屬 QR Code。需使用 HTTPS 並允許相機權限。';
-    scanPane.insertBefore(tip,hiddenContainer||scanPane.firstChild);
-  }
-  // Override the previous scan handler to accept the existing per-traveler token and verify the group.
-  if(start)start.onclick=async()=>{
-    if(typeof db==='undefined'||!db)return result.textContent='請先登入';
-    if(!groupId||!activityId)return result.textContent='請先選擇團體與活動';
-    if(!window.Html5Qrcode)return result.textContent='相機掃描元件尚未載入，請確認網路';
+  const imageBlob=canvas=>new Promise((resolve,reject)=>{
+    canvas.toBlob(blob=>blob?resolve(blob):reject(Error('圖片轉換失敗')),'image/png');
+  });
+  const downloadQr=async()=>{
+    if(!currentCanvas||!currentLink){qrStatus('請先產生團體 QR Code');return;}
+    const button=$('downloadGroupQr');if(button)button.disabled=true;
     try{
-      if(typeof stopScanner==='function')await stopScanner();
-      scanner=new Html5Qrcode('reader');start.disabled=true;
-      await scanner.start({facingMode:'environment'},{fps:8,qrbox:{width:220,height:220}},async raw=>{
-        if(scanBusy)return;scanBusy=true;
-        try{
-          const parsed=JSON.parse(raw);
-          if(parsed.group_id&&parsed.group_id!==groupId)throw Error('這是其他團體的 QR Code');
-          const p=travelers.find(x=>x.qr_token===parsed.token);
-          if(!p)throw Error('找不到本團旅客，請確認已選擇正確團體');
-          const message=await checkin(p);
-          result.textContent=message;
-          result.style.color=/失敗|不在|請先/.test(message)?'#aa443b':'#267548';
-        }catch(e){result.textContent='掃描失敗：'+e.message;result.style.color='#aa443b';}
-        finally{setTimeout(()=>{scanBusy=false;},1200);}
-      });
-      result.textContent='相機已開啟，請對準旅客 QR Code';
-    }catch(e){start.disabled=false;result.textContent='相機啟動失敗：'+e.message;}
+      const blob=await imageBlob(currentCanvas);
+      const name=qrFileName();
+      const isiOS=/iPad|iPhone|iPod/.test(navigator.userAgent)||(/Macintosh/.test(navigator.userAgent)&&navigator.maxTouchPoints>1);
+      if(isiOS&&navigator.share&&navigator.canShare){
+        const file=new File([blob],name,{type:'image/png'});
+        if(navigator.canShare({files:[file]})){
+          await navigator.share({files:[file],title:currentGroupName+' QR Code'});
+          qrStatus('已開啟分享選單，可選擇「儲存影像」或「儲存到檔案」');
+          return;
+        }
+      }
+      const objectUrl=URL.createObjectURL(blob);
+      const a=document.createElement('a');a.href=objectUrl;a.download=name;
+      document.body.append(a);a.click();a.remove();
+      setTimeout(()=>URL.revokeObjectURL(objectUrl),60000);
+      qrStatus(isiOS?'已嘗試下載圖片；若未儲存，請長按 QR Code 圖片選擇儲存':'已下載本團 QR Code PNG 圖片');
+    }catch(e){if(e.name==='AbortError')qrStatus('已取消分享');else qrStatus('下載失敗：'+e.message);}
+    finally{if(button)button.disabled=false;}
   };
-  if(stop)stop.onclick=async()=>{if(typeof stopScanner==='function')await stopScanner();if(start)start.disabled=false;result.textContent='已停止掃描';};
-  // Main app calls this whenever a group changes. Avoid expensive regeneration on every 5s refresh.
-  window.calmAutoShowGroupQr=id=>{
-    const paneVisible=qrPane&&!qrPane.classList.contains('hidden');
-    const list=typeof travelers!=='undefined'&&Array.isArray(travelers)?travelers:[];
-    const next=id+'|'+list.map(p=>p.id+':'+p.qr_token).join(',');
-    if(paneVisible&&next!==lastKey){lastKey=next;showQrs();}
-  };
-  document.querySelector('[data-tab="qrPane"]')?.addEventListener('click',()=>{lastKey='';setTimeout(showQrs,0);});
-  document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{if(start)start.disabled=false;}));
-  // iOS may suspend camera while app is backgrounded: release it on tab/page switch.
-  document.addEventListener('visibilitychange',()=>{if(document.hidden&&typeof stopScanner==='function')stopScanner().then(()=>{if(start)start.disabled=false;});});
+  $('downloadGroupQr')?.addEventListener('click',downloadQr);
+
+  $('makeGroupQr')?.addEventListener('click',async()=>{
+    try{
+      if(typeof db==='undefined'||!groupId)throw Error('請先登入並選擇團體');
+      const {data,error}=await db.rpc('calm_group_qr',{p_group_id:groupId});
+      if(error)throw error;
+      if(!data?.token)throw Error('無法取得團體 QR Code');
+      const url=new URL(location.href);url.search='';url.hash='';
+      url.searchParams.set('checkin',data.token);
+      url.searchParams.set('endpoint',endpoint((typeof getUrl==='function'&&getUrl())||(typeof db!=='undefined'&&db&&db.supabaseUrl)||localStorage.getItem('calm_supabase_url')||''));
+      currentLink=url.href;
+      const area=$('qrCards');area.replaceChildren();
+      const h=document.createElement('h3');h.textContent=data.group_name||'CALM CLUB';area.append(h);
+      const canvas=document.createElement('canvas');area.append(canvas);
+      currentCanvas=null;
+      if($('downloadGroupQr'))$('downloadGroupQr').disabled=true;
+      await renderQr(canvas,currentLink);
+      currentCanvas=canvas;
+      currentGroupName=data.group_name||'CALM CLUB';
+      if($('downloadGroupQr'))$('downloadGroupQr').disabled=false;
+      const img=document.createElement('img');
+      img.src=canvas.toDataURL('image/png');img.alt=currentGroupName+' QR Code';
+      img.style.cssText='max-width:100%;width:320px;height:auto;display:block;margin:0 auto';
+      canvas.replaceWith(img);
+      const p=document.createElement('p');p.textContent='本團整趟行程共用同一個 QR Code。手機可長按圖片儲存。';area.append(p);
+      qrStatus('已顯示團體 QR Code，可下載 PNG 圖片');
+    }catch(e){$('groupQrStatus').textContent='產生失敗：'+e.message;}
+  });
+  $('copyGroupLink')?.addEventListener('click',async()=>{
+    if(!currentLink){$('groupQrStatus').textContent='請先產生團體 QR Code';return;}
+    try{await navigator.clipboard.writeText(currentLink);$('groupQrStatus').textContent='已複製報到連結';}
+    catch{$('groupQrStatus').textContent='複製失敗，請使用 HTTPS 網站';}
+  });
 })();
+
 /* CALM CLUB offline-first check-in extension. No database schema changes.
    Requires the existing authenticated app and activity membership list to be loaded once online. */
 (() => {
