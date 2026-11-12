@@ -470,16 +470,16 @@
     }, true);
   }
 
-  document.querySelector('[data-tab="qrPane"]')
-    ?.addEventListener('click', event => {
-      event.stopImmediatePropagation();
 
+  document.querySelector('[data-tab="qrPane"]')
+    ?.addEventListener('click', () => {
       setTimeout(() => {
-        if (groupId && currentGroup !== groupId) {
+        if (groupId) {
           generateGroupQR();
         }
-      }, 0);
-    }, true);
+      }, 150);
+    });
+
 
   window.calmAutoShowGroupQr = id => {
     if (id !== currentGroup) {
