@@ -1532,7 +1532,7 @@ $('exportPdfBtn').onclick=()=>{
   '<style>@page{size:A4;margin:15mm}body{font-family:"Noto Sans TC","Microsoft JhengHei",sans-serif;color:#203d31;font-size:11px}h1{font-size:21px;margin:0 0 8px}h2{font-size:15px;margin:0 0 12px;font-weight:500}.summary{display:flex;gap:16px;margin:16px 0;padding:12px;border:1px solid #ddd;border-radius:8px}.summary span{flex:1;text-align:center}.summary b{display:block;font-size:22px;margin-top:4px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #d9dfdc;padding:7px;text-align:left}th{background:#eaf0ec}tr{break-inside:avoid}.ok{color:#146c43}.missing{color:#a3402c}.foot{margin-top:14px;color:#666;font-size:10px}@media print{thead{display:table-header-group}}</style></head><body>'+
   '<h1>'+safe(title)+'</h1><h2>活動報到統計｜'+safe(actName)+(act.activity_date?'｜'+safe(act.activity_date):'')+'</h2>'+
   '<div class="summary"><span>應到<b>'+people.length+'</b></span><span>已到<b>'+arrived+'</b></span><span>未到<b>'+(people.length-arrived)+'</b></span></div>'+
-  '<table><thead><tr><th>系統序號</th><th>中文姓名</th><th>車次</th><th>狀態</th><th>報到時間</th></tr></thead><tbody>'+rows+'</tbody></table>'+
+  '<table><thead><tr><th>序號</th><th>中文姓名</th><th>車次</th><th>狀態</th><th>報到時間</th></tr></thead><tbody>'+rows+'</tbody></table>'+
   '<div class="foot">CALM CLUB｜匯出時間：'+safe(new Date().toLocaleString('zh-TW'))+'｜此報表僅供團務使用，請妥善保管旅客資料。</div></body></html>';
   const win=window.open('','_blank');
   if(!win)return alert('瀏覽器封鎖了報表視窗，請允許彈出視窗後再試。');
