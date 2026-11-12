@@ -12,7 +12,7 @@
 <div id="app" class="hidden"><section class="card"><div class="row"><div><label>目前團體</label><select id="tourSelect"></select></div><div><label>目前活動</label><select id="activitySelect"></select></div><button id="refreshBtn">重新整理資料</button></div><p id="loadStatus" class="status"></p></section>
 <nav class="noprint"><button data-tab="reportPane">報到統計</button><button class="secondary" data-tab="scanPane">工作人員報到</button><button class="secondary" data-tab="guestPane">旅客名單</button><button class="secondary" data-tab="activityPane">活動名單</button><button class="secondary" data-tab="qrPane">旅客 QR Code</button><button class="secondary" data-tab="tourPane">團體管理</button><button class="secondary hidden" data-tab="staffPane" id="staffTab">人員帳號管理</button></nav>
 <section class="card pane" id="reportPane"><h2>活動報到統計</h2><div class="stats"><div class="stat">全團人數<strong id="tourTotal">0</strong></div><div class="stat">應到<strong id="expected">0</strong></div><div class="stat">已到<strong id="done">0</strong></div><div class="stat">未到<strong id="missing">0</strong></div></div><div class="row noprint" style="margin-top:12px"><button class="secondary" data-filter="missing">只看未到</button><button class="secondary" data-filter="all">查看全部</button><button id="exportBtn">匯出 CSV</button><button id="exportPdfBtn" class="secondary">匯出 PDF</button></div><div id="reportList"></div></section>
-<section class="card pane hidden" id="scanPane"><h2>工作人員掃描旅客 QR Code</h2><div><label for="cameraChoice">掃描相機（手機／電腦皆可）</label><select id="cameraChoice"><option value="">自動選擇相機</option></select><button id="startScan">啟動相機掃描</button><button id="stopScan">停止掃描</button><label for="qrImageFile">無相機時可上傳 QR Code 圖片辨識</label><input id="qrImageFile" type="file" accept="image/*"><div id="reader" style="width:100%;max-width:520px;margin:12px auto"></div><p id="scanResult" class="status"></p><small>掃描提示音：成功一聲、重複兩聲、無效低音。請確認裝置未靜音，並先點選「啟動相機掃描」。</small></div><label>備用：手動協助旅客報到</label><div class="row"><select id="manualGuest"></select><button id="manualCheck">確認報到</button></div><small>請選擇目前活動及旅客姓名，確認後同步更新報到紀錄。</small></section>
+<section class="card pane hidden" id="scanPane"><h2>工作人員掃描旅客 QR Code</h2><div><label for="cameraChoice">掃描相機（手機／電腦皆可）</label><select id="cameraChoice"><option value="">自動選擇相機</option></select><button id="startScan">啟動相機掃描</button><button id="testScanSound" type="button">🔊 測試提示音</button><button id="stopScan">停止掃描</button><label for="qrImageFile">無相機時可上傳 QR Code 圖片辨識</label><input id="qrImageFile" type="file" accept="image/*"><div id="reader" style="width:100%;max-width:520px;margin:12px auto"></div><p id="scanResult" class="status"></p><small>掃描提示音：成功一聲、重複兩聲、無效低音。請先按「測試提示音」啟用音效，再啟動掃描；iPhone 請確認靜音模式及音量。</small></div><label>備用：手動協助旅客報到</label><div class="row"><select id="manualGuest"></select><button id="manualCheck">確認報到</button></div><small>請選擇目前活動及旅客姓名，確認後同步更新報到紀錄。</small></section>
 <section class="card pane hidden" id="guestPane"><h2>旅客名單</h2><div class="row"><div><label>旅客姓名</label><input id="guestName" placeholder="例如：王小明"></div><div><label>車次</label><input id="guestBus" placeholder="例如：A車"></div><button id="addGuest">新增旅客</button></div><label>匯入 Excel 旅客名單（護照中文姓名必填）</label><input id="excel" type="file" accept=".xlsx,.xls,.csv"><p class="muted">支援 .xlsx、.xls、.csv；第一列表頭使用「護照中文姓名」、「車次」即可；系統自動產生序號，無須填寫編號。</p><div id="guestList"></div></section>
 <section class="card pane hidden" id="activityPane"><h2>活動參加名單</h2><p class="muted">新增活動預設全團參加；在下方輸入不參加者姓名並儲存即可。</p><div style="background:#f1f6f2;padding:14px;border-radius:12px;margin:12px 0">
 <label for="excludedNames"><strong>不參加本場活動的旅客姓名</strong></label>
@@ -1503,15 +1503,44 @@ $('createTourWithExcel').onclick=async()=>{
 async function calmAddMembers(activity,ids){for(let i=0;i<ids.length;i+=100){const rows=ids.slice(i,i+100).map(id=>({group_id:groupId,activity_id:activity,traveler_id:id}));const {error}=await db.from('activity_members').insert(rows);if(error)throw error;}}
 $('addActivity').onclick=async()=>{const name=$('activityName').value.trim(),date=$('activityDate').value,location=$('activityLocation').value.trim();if(!groupId||!name||!date)return alert('請填寫活動名稱及日期');try{const created=await write('tour_activities',{group_id:groupId,activity_name:name,activity_date:date,location});if(created[0]&&travelers.length){try{await calmAddMembers(created[0].id,travelers.map(p=>p.id))}catch(err){alert('活動已建立，但自動加入旅客失敗：'+err.message+'。請勿重複建立活動。')}}$('activityName').value='';await loadTour()}catch(e){alert('新增活動失敗：'+e.message)}};
 async function checkin(p){if(!p||!activityId)return '請先選擇活動';if(!getMembers().some(m=>m.traveler_id===p.id))return '此旅客不在本活動名單';const old=getCheckin(p.id);if(old)return `${p.name||p.traveler_name} 已報到（${dateTime(old.checked_in_at||old.checkin_time||old.created_at)}）`;try{const {error}=await db.from('checkins').insert({group_id:groupId,activity_id:activityId,traveler_id:p.id});if(error)throw error;await loadActivity();return `${p.name||p.traveler_name} 報到成功`}catch(e){return '報到失敗：'+e.message+'（請確認 checkins 欄位與寫入權限）'}}
-$('manualCheck').onclick=async()=>{calmUnlockAudio();const result=await checkin(travelers.find(p=>p.id===$('manualGuest').value));calmResultSound(result);status('scanResult',result,!result.includes('失敗'))};
+$('manualCheck').onclick=async()=>{await calmUnlockAudio();const result=await checkin(travelers.find(p=>p.id===$('manualGuest').value));calmResultSound(result);status('scanResult',result,!result.includes('失敗'))};
 async function stopScanner(){if(scanner){try{if(scanner.isScanning)await scanner.stop()}catch{}try{scanner.clear()}catch{}scanner=null}}
 let calmAudioCtx=null;
-function calmUnlockAudio(){try{const C=window.AudioContext||window.webkitAudioContext;if(!C)return;if(!calmAudioCtx)calmAudioCtx=new C();if(calmAudioCtx.state==='suspended')calmAudioCtx.resume().catch(()=>{});}catch(e){}}
-function calmBeep(kind){try{calmUnlockAudio();if(!calmAudioCtx||calmAudioCtx.state!=='running')return;const now=calmAudioCtx.currentTime;const notes=kind==='success'?[[880,0,.13]]:kind==='duplicate'?[[660,0,.1],[660,.16,.1]]:[[300,0,.22]];notes.forEach(([freq,offset,duration])=>{const osc=calmAudioCtx.createOscillator(),gain=calmAudioCtx.createGain();osc.type='sine';osc.frequency.value=freq;gain.gain.setValueAtTime(.0001,now+offset);gain.gain.exponentialRampToValueAtTime(.16,now+offset+.012);gain.gain.exponentialRampToValueAtTime(.0001,now+offset+duration);osc.connect(gain);gain.connect(calmAudioCtx.destination);osc.start(now+offset);osc.stop(now+offset+duration+.015)});}catch(e){}}
+async function calmUnlockAudio(){
+  try{
+    const C=window.AudioContext||window.webkitAudioContext;
+    if(!C)return false;
+    if(!calmAudioCtx)calmAudioCtx=new C();
+    if(calmAudioCtx.state!=='running')await calmAudioCtx.resume();
+    return calmAudioCtx.state==='running';
+  }catch(e){return false;}
+}
+function calmBeep(kind){
+  try{
+    if(!calmAudioCtx||calmAudioCtx.state!=='running')return false;
+    const now=calmAudioCtx.currentTime+.025;
+    const notes=kind==='success'?[[950,0,.18]]:kind==='duplicate'?[[720,0,.14],[720,.22,.14]]:[[340,0,.28]];
+    notes.forEach(([freq,offset,duration])=>{
+      const osc=calmAudioCtx.createOscillator(),gain=calmAudioCtx.createGain();
+      osc.type='square';osc.frequency.setValueAtTime(freq,now+offset);
+      gain.gain.setValueAtTime(.0001,now+offset);
+      gain.gain.exponentialRampToValueAtTime(.10,now+offset+.025);
+      gain.gain.exponentialRampToValueAtTime(.0001,now+offset+duration);
+      osc.connect(gain);gain.connect(calmAudioCtx.destination);
+      osc.start(now+offset);osc.stop(now+offset+duration+.02);
+    });
+    return true;
+  }catch(e){return false;}
+}
 function calmResultSound(result){calmBeep(result.includes('報到成功')?'success':result.includes('已報到')?'duplicate':'error')}
+$('testScanSound').onclick=async()=>{
+  const ok=await calmUnlockAudio();
+  if(ok){calmBeep('success');status('scanResult','已播放測試提示音；如果聽不到，請檢查手機靜音、媒體音量，並使用 Safari 或 Chrome。',true)}
+  else status('scanResult','瀏覽器無法啟用音效，請使用 Safari 或 Chrome 開啟 HTTPS 網站。',false);
+};
 async function processTravelerQR(raw){if(scanBusy)return;scanBusy=true;try{let token;try{token=JSON.parse(raw)?.token}catch{token=raw.trim()}const p=travelers.find(x=>x.qr_token&&x.qr_token===token);if(!p){calmBeep('error');status('scanResult','找不到目前團體的旅客 QR Code，請確認已選擇正確團體',false);return}const result=await checkin(p);calmResultSound(result);status('scanResult',result,!result.includes('失敗'))}catch(e){calmBeep('error');status('scanResult','掃描處理失敗：'+e.message,false)}finally{setTimeout(()=>{scanBusy=false},1200)}}
 async function loadCameras(){const select=$('cameraChoice');if(!select||!window.Html5Qrcode)return;try{const devices=await Html5Qrcode.getCameras();const old=select.value;select.innerHTML='<option value="">自動選擇相機</option>'+devices.map((d,i)=>`<option value="${escapeHtml(d.id)}">${escapeHtml(d.label||'相機 '+(i+1))}</option>`).join('');if(devices.some(d=>d.id===old))select.value=old}catch(e){status('scanResult','無法列出相機：'+e.message,false)}}
-$('startScan').onclick=async()=>{calmUnlockAudio();if(!window.Html5Qrcode)return status('scanResult','掃描套件未載入，請檢查網路');if(!groupId||!activityId)return status('scanResult','請先選擇團體與活動',false);try{await stopScanner();scanner=new Html5Qrcode('reader');const selected=$('cameraChoice').value;const camera=selected||{facingMode:'environment'};await scanner.start(camera,{fps:10,qrbox:(w,h)=>{const size=Math.max(130,Math.min(240,Math.floor(Math.min(w,h)*0.75)));return {width:size,height:size}}},processTravelerQR);status('scanResult','相機已啟動，請將旅客 QR Code 對準畫面',true)}catch(e){status('scanResult','相機無法啟動：'+e.message+'。請使用 HTTPS、允許相機權限，或改用圖片辨識。',false);await stopScanner()}};
+$('startScan').onclick=async()=>{await calmUnlockAudio();if(!window.Html5Qrcode)return status('scanResult','掃描套件未載入，請檢查網路');if(!groupId||!activityId)return status('scanResult','請先選擇團體與活動',false);try{await stopScanner();scanner=new Html5Qrcode('reader');const selected=$('cameraChoice').value;const camera=selected||{facingMode:'environment'};await scanner.start(camera,{fps:10,qrbox:(w,h)=>{const size=Math.max(130,Math.min(240,Math.floor(Math.min(w,h)*0.75)));return {width:size,height:size}}},processTravelerQR);status('scanResult','相機已啟動，請將旅客 QR Code 對準畫面',true)}catch(e){status('scanResult','相機無法啟動：'+e.message+'。請使用 HTTPS、允許相機權限，或改用圖片辨識。',false);await stopScanner()}};
 $('stopScan').onclick=async()=>{await stopScanner();status('scanResult','已停止相機掃描',true)};
 $('cameraChoice').onfocus=()=>{if($('cameraChoice').options.length<=1)loadCameras()};
 $('qrImageFile').onchange=async e=>{const file=e.target.files?.[0];if(!file)return;try{await stopScanner();if(!window.Html5Qrcode)throw Error('掃描套件未載入');const reader=new Html5Qrcode('reader');scanner=reader;const decoded=await reader.scanFile(file,true);await processTravelerQR(decoded)}catch(err){status('scanResult','圖片辨識失敗：'+err.message,false)}finally{await stopScanner();e.target.value=''}};
