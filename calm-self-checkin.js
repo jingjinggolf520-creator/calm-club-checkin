@@ -283,3 +283,212 @@
   panel();update();
   window.calmOffline={sync:flush,save:snapshot,status:update};
 })();
+
+
+/* CALM CLUB｜一團一張 QR Code 修正 */
+(() => {
+  'use strict';
+
+  const $ = id => document.getElementById(id);
+  const pane = $('qrPane');
+  const cards = $('qrCards');
+  const make = $('makeGroupQr');
+  const copy = $('copyGroupLink');
+  const download = $('downloadGroupQr');
+
+  if (!pane || !cards || !make) return;
+
+  pane.querySelector('h2').textContent = '團體專屬 QR Code';
+
+  const intro = pane.querySelector('p.muted');
+  if (intro) {
+    intro.textContent =
+      '一個團體一張 QR Code，整趟旅程重複使用。旅客掃碼後輸入中文姓名，即可完成目前開放活動的報到。';
+  }
+
+  make.textContent = '產生／顯示本團 QR Code';
+
+  if (copy) copy.style.display = '';
+
+  if (download) {
+    download.style.display = '';
+    download.disabled = true;
+  }
+
+  cards.style.cssText = 'text-align:center';
+
+  const say = message => {
+    const el = $('groupQrStatus');
+    if (el) el.textContent = message;
+  };
+
+  let currentUrl = '';
+  let currentCanvas = null;
+  let currentGroup = '';
+  let busy = false;
+
+  async function generateGroupQR() {
+    if (busy) return;
+
+    if (typeof db === 'undefined' || !db || !groupId) {
+      say('請先登入並選擇團體');
+      return;
+    }
+
+    busy = true;
+    currentUrl = '';
+    currentCanvas = null;
+    cards.replaceChildren();
+
+    if (download) download.disabled = true;
+
+    say('正在產生團體 QR Code…');
+
+    try {
+      const { data, error } = await db.rpc(
+        'calm_group_qr',
+        { p_group_id: groupId }
+      );
+
+      if (error) throw error;
+
+      const info = Array.isArray(data) ? data[0] : data;
+
+      if (info?.ok === false) {
+        throw new Error(info.message || '無法取得團體 QR Code');
+      }
+
+      const token =
+        info?.token ||
+        info?.qr_token ||
+        info?.checkin_token;
+
+      if (!token) {
+        throw new Error('無法取得團體 QR 識別碼');
+      }
+
+      const link = new URL(location.href);
+      link.search = '';
+      link.hash = '';
+
+      link.searchParams.set('checkin', token);
+      link.searchParams.set('endpoint', getUrl());
+
+      currentUrl = link.href;
+      currentGroup = groupId;
+
+      if (!window.QRCode?.toCanvas) {
+        throw new Error('QR Code 元件未載入');
+      }
+
+      currentCanvas = document.createElement('canvas');
+
+      await new Promise((resolve, reject) => {
+        window.QRCode.toCanvas(
+          currentCanvas,
+          currentUrl,
+          { width: 300, margin: 3 },
+          error => error ? reject(error) : resolve()
+        );
+      });
+
+      const group = getGroup();
+
+      const wrapper = document.createElement('div');
+      wrapper.style.cssText =
+        'max-width:380px;margin:14px auto;padding:18px;border:1px solid #d6c399;border-radius:14px;background:#fff';
+
+      const heading = document.createElement('h3');
+      heading.textContent =
+        group?.group_name ||
+        group?.name ||
+        group?.tour_name ||
+        'CALM CLUB';
+
+      const image = document.createElement('img');
+      image.alt = '本團專屬 QR Code';
+      image.src = currentCanvas.toDataURL('image/png');
+      image.style.cssText =
+        'display:block;width:300px;max-width:100%;height:auto;margin:12px auto';
+
+      const tip = document.createElement('p');
+      tip.textContent = '掃描後輸入中文姓名報到';
+
+      wrapper.append(heading, image, tip);
+      cards.append(wrapper);
+
+      if (download) download.disabled = false;
+
+      say('本團 QR Code 已產生，整趟旅程重複使用。');
+
+    } catch (error) {
+      say('產生失敗：' + error.message);
+    } finally {
+      busy = false;
+    }
+  }
+
+  make.addEventListener('click', event => {
+    event.stopImmediatePropagation();
+    generateGroupQR();
+  }, true);
+
+  if (copy) {
+    copy.addEventListener('click', async event => {
+      event.stopImmediatePropagation();
+
+      if (!currentUrl || currentGroup !== groupId) {
+        await generateGroupQR();
+      }
+
+      if (!currentUrl) return;
+
+      try {
+        await navigator.clipboard.writeText(currentUrl);
+        say('已複製團體報到網址');
+      } catch {
+        say('無法自動複製，請使用上方 QR Code');
+      }
+    }, true);
+  }
+
+  if (download) {
+    download.addEventListener('click', event => {
+      event.stopImmediatePropagation();
+
+      if (!currentCanvas) return;
+
+      const link = document.createElement('a');
+      link.href = currentCanvas.toDataURL('image/png');
+      link.download = 'CALM_CLUB_團體QR.png';
+
+      document.body.append(link);
+      link.click();
+      link.remove();
+
+      say('iPhone 可長按 QR 圖片儲存到照片');
+    }, true);
+  }
+
+  document.querySelector('[data-tab="qrPane"]')
+    ?.addEventListener('click', event => {
+      event.stopImmediatePropagation();
+
+      setTimeout(() => {
+        if (groupId && currentGroup !== groupId) {
+          generateGroupQR();
+        }
+      }, 0);
+    }, true);
+
+  window.calmAutoShowGroupQr = id => {
+    if (id !== currentGroup) {
+      currentUrl = '';
+      currentCanvas = null;
+      cards.replaceChildren();
+
+      if (download) download.disabled = true;
+    }
+  };
+
+})();
