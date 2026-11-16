@@ -1645,9 +1645,13 @@ setInterval(async()=>{
   try{
     const {data:latestActivities,error:activityError}=await db.from('tour_activities').select('*').eq('group_id',groupId);
     if(activityError)throw activityError;
+    // 每 5 秒自動同步時也保持日期排序，且不強制跳回其他活動。
     activities=latestActivities||[];
-    const opened=activities.filter(x=>x.checkin_status==='open');
-    if(opened.length===1)activityId=opened[0].id;
+    calmSortActivities();
+    if(!activities.some(x=>x.id===activityId)){
+      const opened=activities.filter(x=>x.checkin_status==='open');
+      activityId=opened.length===1?opened[0].id:(activities[0]?.id||'');
+    }
     await loadActivity();
   }catch(e){status('loadStatus','自動同步失敗：'+e.message)}
   finally{calmSyncBusy=false}
