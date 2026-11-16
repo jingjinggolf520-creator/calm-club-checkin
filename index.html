@@ -1407,7 +1407,22 @@ async function loggedIn(){const {data, error:authError}=await db.auth.getUser();
 async function query(table,select='*',modify=x=>x){const {data,error}=await modify(db.from(table).select(select));if(error)throw Error(table+'：'+error.message);return data||[]}
 async function write(table,body,method='insert'){const q=db.from(table);const {data,error}=await(method==='insert'?q.insert(body).select():q.delete().eq('id',body).select());if(error)throw Error(table+'：'+error.message);return data||[]}
 async function loadGroups(){try{status('loadStatus','正在載入團體…',true);groupList=await Promise.race([query('tour_groups'),new Promise((_,reject)=>setTimeout(()=>reject(new Error('讀取超過 12 秒，請檢查網路或導遊帳號的團體讀取權限')),12000))]);if(window.calmProfile?.role==='guide'&&!groupList.length){groupId='';$('tourSelect').innerHTML='<option value="">尚未取得指派團體</option>';status('loadStatus','目前看不到指派團體。請管理員至「人員帳號管理」確認已指派團體，並確認資料庫已開放領隊讀取該團體；指派完成後按「重新整理資料」。');travelers=[];activities=[];members=[];checkins=[];render();return;}groupId=groupList.some(x=>x.id===groupId)?groupId:(groupList[0]?.id||'');$('tourSelect').innerHTML=groupList.map(x=>`<option value="${x.id}">${escapeHtml(x.group_name||x.name||x.tour_name||x.id)}</option>`).join('');$('tourSelect').value=groupId;await loadTour()}catch(e){status('loadStatus','無法讀取團體：'+e.message+'。領隊請管理員確認團體指派及 Supabase 讀取權限。');$('tourSelect').innerHTML='<option value="">載入失敗，請按重新整理資料</option>'}}
-async function loadTour(){if(!groupId){travelers=[];activities=[];members=[];checkins=[];render();return}try{status('loadStatus','正在載入旅客與活動…',true);[travelers,activities]=await Promise.race([Promise.all([query('travelers','*',q=>q.eq('group_id',groupId)),query('tour_activities','*',q=>q.eq('group_id',groupId))]),new Promise((_,reject)=>setTimeout(()=>reject(new Error('讀取旅客與活動超時，請檢查帳號權限')),12000))]);travelers=travelers.filter(p=>!String(p.traveler_no||'').startsWith('ARCHIVED__'));activities.sort((a,b)=>String(a.activity_date||'9999-12-31').localeCompare(String(b.activity_date||'9999-12-31'))||String(a.activity_name||a.name||'').localeCompare(String(b.activity_name||b.name||''),'zh-Hant'));const openActivities=activities.filter(x=>x.checkin_status==='open');
+// 活動只排序顯示，不變更 Supabase 的活動日期或其他資料。
+function calmActivityDateKey(a){
+ const raw=String(a.activity_date||'').trim();
+ if(!raw)return Number.MAX_SAFE_INTEGER;
+ const iso=raw.match(/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/);
+ if(iso)return Number(iso[1])*10000+Number(iso[2])*100+Number(iso[3]);
+ const compact=raw.match(/^(\d{4})(\d{2})(\d{2})(?:\D|$)/);
+ if(compact)return Number(compact[1])*10000+Number(compact[2])*100+Number(compact[3]);
+ const roc=raw.match(/^(\d{2,3})[-\/.](\d{1,2})[-\/.](\d{1,2})/);
+ if(roc)return (Number(roc[1])+1911)*10000+Number(roc[2])*100+Number(roc[3]);
+ const parsed=Date.parse(raw);
+ if(Number.isFinite(parsed)){const d=new Date(parsed);return d.getUTCFullYear()*10000+(d.getUTCMonth()+1)*100+d.getUTCDate()}
+ return Number.MAX_SAFE_INTEGER;
+}
+function calmSortActivities(){activities.sort((a,b)=>calmActivityDateKey(a)-calmActivityDateKey(b)||String(a.activity_date||'').localeCompare(String(b.activity_date||''),'zh-Hant',{numeric:true})||String(a.activity_name||a.name||'').localeCompare(String(b.activity_name||b.name||''),'zh-Hant',{numeric:true}));}
+async function loadTour(){if(!groupId){travelers=[];activities=[];members=[];checkins=[];render();return}try{status('loadStatus','正在載入旅客與活動…',true);[travelers,activities]=await Promise.race([Promise.all([query('travelers','*',q=>q.eq('group_id',groupId)),query('tour_activities','*',q=>q.eq('group_id',groupId))]),new Promise((_,reject)=>setTimeout(()=>reject(new Error('讀取旅客與活動超時，請檢查帳號權限')),12000))]);travelers=travelers.filter(p=>!String(p.traveler_no||'').startsWith('ARCHIVED__'));calmSortActivities();const openActivities=activities.filter(x=>x.checkin_status==='open');
 activityId=openActivities.length===1?openActivities[0].id:(activities.some(x=>x.id===activityId)?activityId:(activities[0]?.id||''));
 await loadActivity();status('loadStatus',`已載入 ${travelers.length} 位旅客、${activities.length} 個活動`,true)}catch(e){status('loadStatus','讀取失敗：'+e.message)}}
 async function loadActivity(){try{[members,checkins]=await Promise.all([query('activity_members','*',q=>q.eq('group_id',groupId)),query('checkins','*',q=>q.eq('group_id',groupId))]);render();if(document.activeElement!==$('excludedNames'))fillExcludedNames()}catch(e){status('loadStatus','讀取報到資料失敗：'+e.message);render()}}
@@ -1418,7 +1433,7 @@ function calmReportPeople(){return getExpected().filter(p=>calmPass(p,$('reportG
 function calmSeq(p){const i=travelers.findIndex(x=>x.id===p.id);return i<0?'':String(i+1).padStart(3,'0')}
 let activityPickerOpen=false,activityGroupFilter=new Set(['all']),activityDraft=new Set(),activityDraftFor='';
 function calmActivityVisible(p){return String(p.name||p.traveler_name||'').includes($('activityPersonSearch')?.value||'')}
-function render(){if(activityPickerOpen&&activityDraftFor!==activityId){activityPickerOpen=false;$('activityPicker').classList.add('hidden')}const t=getGroup(),a=getActivity();$('tourSelect').value=groupId;$('activitySelect').innerHTML=activities.map(x=>`<option value="${x.id}">${escapeHtml(x.activity_date||'')}｜${escapeHtml(x.activity_name||x.name||'活動')}</option>`).join('');$('activitySelect').value=activityId;
+function render(){calmSortActivities();if(activityPickerOpen&&activityDraftFor!==activityId){activityPickerOpen=false;$('activityPicker').classList.add('hidden')}const t=getGroup(),a=getActivity();$('tourSelect').value=groupId;$('activitySelect').innerHTML=activities.map(x=>`<option value="${x.id}">${escapeHtml(x.activity_date||'')}｜${escapeHtml(x.activity_name||x.name||'活動')}</option>`).join('');$('activitySelect').value=activityId;
 const activityOverview=$('calmActivityOverview');
 if(activityOverview){
  const isAdmin=window.calmProfile?.role==='admin';
