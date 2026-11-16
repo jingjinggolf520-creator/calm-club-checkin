@@ -1706,7 +1706,31 @@ $('createTourWithExcel').onclick=async()=>{
   finally{btn.disabled=false;}
 };
 
-async function calmAddMembers(activity,ids,bus=''){for(let i=0;i<ids.length;i+=100){const rows=ids.slice(i,i+100).map(id=>({group_id:groupId,activity_id:activity,traveler_id:id,bus_no:bus}));const {error}=await db.from('activity_members').insert(rows);if(error)throw error;}}
+// Supabase 舊版資料表沒有 activity_members.bus_no：先保存活動與名單，車次欄位不存在時自動略過。
+let calmBusColumnUnavailable=false;
+function calmMissingBusColumn(error){return /(?:could not find|does not exist|unknown column|schema cache)/i.test(String(error?.message||error||''))&&/bus_no/i.test(String(error?.message||error||''))}
+async function calmMemberInsert(rows){
+ let payload=calmBusColumnUnavailable?rows.map(({bus_no,...rest})=>rest):rows;
+ let {error}=await db.from('activity_members').insert(payload);
+ if(error&&!calmBusColumnUnavailable&&calmMissingBusColumn(error)){
+  calmBusColumnUnavailable=true;
+  payload=rows.map(({bus_no,...rest})=>rest);
+  ({error}=await db.from('activity_members').insert(payload));
+ }
+ if(error)throw error;
+}
+async function calmMemberUpdate(fields,filters){
+ let payload=calmBusColumnUnavailable?Object.fromEntries(Object.entries(fields).filter(([k])=>k!=='bus_no')):fields;
+ const run=async data=>{let q=db.from('activity_members').update(data);for(const [key,value] of Object.entries(filters))q=q.eq(key,value);return q};
+ let {error}=await run(payload);
+ if(error&&!calmBusColumnUnavailable&&calmMissingBusColumn(error)){
+  calmBusColumnUnavailable=true;
+  payload=Object.fromEntries(Object.entries(fields).filter(([k])=>k!=='bus_no'));
+  ({error}=await run(payload));
+ }
+ if(error)throw error;
+}
+async function calmAddMembers(activity,ids,bus=''){for(let i=0;i<ids.length;i+=100){const rows=ids.slice(i,i+100).map(id=>({group_id:groupId,activity_id:activity,traveler_id:id,bus_no:bus}));await calmMemberInsert(rows);}}
 $('addActivity').onclick=async()=>{const name=$('activityName').value.trim(),date=$('activityDate').value,location=$('activityLocation').value.trim(),defaultBus=$('activityDefaultBus').value;if(!groupId||!name||!date)return alert('請填寫活動名稱及日期');try{const created=await write('tour_activities',{group_id:groupId,activity_name:name,activity_date:date,location});if(created[0]&&travelers.length){try{await calmAddMembers(created[0].id,travelers.map(p=>p.id),defaultBus)}catch(err){alert('活動已建立，但自動加入旅客失敗：'+err.message+'。請勿重複建立活動。')}}$('activityName').value='';$('activityDefaultBus').value='';await loadTour()}catch(e){alert('新增活動失敗：'+e.message)}};
 async function checkin(p){if(!p||!activityId)return '請先選擇活動';if(!getMembers().some(m=>m.traveler_id===p.id))return '此旅客不在本活動名單';const old=getCheckin(p.id);if(old)return `${p.name||p.traveler_name} 已報到（${dateTime(old.checked_in_at||old.checkin_time||old.created_at)}）`;try{const {error}=await db.from('checkins').insert({group_id:groupId,activity_id:activityId,traveler_id:p.id});if(error)throw error;await loadActivity();return `${p.name||p.traveler_name} 報到成功`}catch(e){return '報到失敗：'+e.message+'（請確認 checkins 欄位與寫入權限）'}}
 $('manualCheck').onclick=async()=>{await calmUnlockAudio();const result=await checkin(travelers.find(p=>p.id===$('manualGuest').value));calmResultSound(result);status('scanResult',result,!result.includes('失敗'))};
@@ -1876,8 +1900,10 @@ function calmBatchShow(){
  const plan=calmBatchPlan,target=$('batchActivityPreview');
  if(!plan){target.classList.add('hidden');target.innerHTML='';return;}
  target.classList.remove('hidden');
- target.innerHTML='<strong>匯入預覽｜共 '+plan.length+' 張工作表</strong><div style="overflow-x:auto"><table style="width:100%;margin-top:8px"><thead><tr><th>Excel 工作表／活動</th><th>日期</th><th>符合人數</th><th>提醒</th></tr></thead><tbody>'+plan.map(p=>`<tr><td>${escapeHtml(p.name)}<small style="display:block">${p.existing?'更新現有活動':'建立新活動'}</small></td><td>${escapeHtml(p.date)}</td><td>${p.people.length} 人</td><td>${p.errors.length?'<span class="bad">'+escapeHtml(p.errors.slice(0,5).join('、'))+(p.errors.length>5?'…':'')+'</span>':'<span class="good">可匯入</span>'}</td></tr>`).join('')+'</tbody></table></div><p class="muted">匯入後自動建立活動與參加名單；未比對成功的姓名會跳過並顯示提醒。</p><div class="row"><button type="button" id="batchActivitySave">確認一次匯入全部工作表</button><button type="button" class="secondary" id="batchActivityCancel">取消</button></div>';
- $('batchActivitySave').disabled=plan.some(p=>!p.people.length||!p.date);
+ target.innerHTML='<strong>匯入預覽｜共 '+plan.length+' 張工作表（可勾選要匯入的活動）</strong><div style="overflow-x:auto"><table style="width:100%;margin-top:8px"><thead><tr><th><input type="checkbox" id="batchSelectAll" checked title="全選／取消全選"></th><th>Excel 工作表／活動</th><th>日期</th><th>符合人數</th><th>提醒</th></tr></thead><tbody>'+plan.map((p,i)=>`<tr><td><input type="checkbox" data-batch-select="${i}" ${p.selected?'checked':''} ${(!p.people.length||!p.date)?'disabled':''}></td><td>${escapeHtml(p.name)}<small style="display:block">${p.existing?'更新現有活動':'建立新活動'}</small></td><td>${escapeHtml(p.date)}</td><td>${p.people.length} 人</td><td>${p.errors.length?'<span class="bad">'+escapeHtml(p.errors.slice(0,5).join('、'))+(p.errors.length>5?'…':'')+'</span>':'<span class="good">可匯入</span>'}</td></tr>`).join('')+'</tbody></table></div><p class="muted">匯入後自動建立活動與參加名單；未比對成功的姓名會跳過並顯示提醒。</p><div class="row"><button type="button" id="batchActivitySave">匯入已勾選的工作表</button><button type="button" class="secondary" id="batchActivityCancel">取消</button></div>';
+ $('batchActivitySave').disabled=!plan.some(p=>p.selected&&p.people.length&&p.date);
+ target.querySelectorAll('[data-batch-select]').forEach(cb=>cb.onchange=()=>{plan[Number(cb.dataset.batchSelect)].selected=cb.checked;$('batchActivitySave').disabled=!plan.some(p=>p.selected&&p.people.length&&p.date);const all=target.querySelector('#batchSelectAll');if(all)all.checked=plan.filter(p=>p.people.length&&p.date).every(p=>p.selected)});
+ const selectAll=target.querySelector('#batchSelectAll');if(selectAll){selectAll.checked=plan.filter(p=>p.people.length&&p.date).every(p=>p.selected);selectAll.onchange=()=>{for(const p of plan)if(p.people.length&&p.date)p.selected=selectAll.checked;calmBatchShow()}}
  $('batchActivitySave').onclick=calmBatchSave;
  $('batchActivityCancel').onclick=()=>{calmBatchPlan=null;calmBatchShow();$('batchActivityStatus').textContent='已取消批次匯入'};
 }
@@ -1901,21 +1927,21 @@ $('batchActivityExcel').onchange=async e=>{
    }
    if(!people.length)errors.push('無符合旅客');
    const existing=activities.find(a=>String(a.activity_date||'').slice(0,10)===date&&calmBatchNorm(a.activity_name||a.name)===calmBatchNorm(name));
-   plan.push({name,date,people,errors,existing:existing?.id||''});
+   plan.push({name,date,people,errors,existing:existing?.id||'',selected:!!(people.length&&date)});
   }
   calmBatchPlan=plan;calmBatchShow();
   const n=plan.reduce((a,p)=>a+p.people.length,0),bad=plan.filter(p=>p.errors.length),blocking=plan.filter(p=>!p.people.length||!p.date);
-  $('batchActivityStatus').textContent=`已讀取 ${plan.length} 張工作表、${n} 筆活動參加紀錄。${blocking.length?'有 '+blocking.length+' 張工作表無法建立（缺少日期或有效旅客），請查看提醒。': '正在自動建立活動並匯入名單…'}${bad.length?'；另有 '+bad.length+' 張表存在未比對資料，僅匯入成功比對的人員。':''}`;
-  if(!blocking.length)await calmBatchSave(true);
+  $('batchActivityStatus').textContent=`已讀取 ${plan.length} 張工作表、${n} 筆活動參加紀錄。${blocking.length?'有 '+blocking.length+' 張工作表無法建立（缺少日期或有效旅客），請查看提醒。': '請勾選要匯入的工作表，再按「匯入已勾選的工作表」。'}${bad.length?'；另有 '+bad.length+' 張表存在未比對資料，僅匯入成功比對的人員。':''}`;
+  // 由使用者勾選後手動確認，避免匯入不需要的工作表。
  }catch(err){calmBatchPlan=null;calmBatchShow();$('batchActivityStatus').textContent='讀取失敗：'+err.message;alert('批次匯入失敗：'+err.message)}
  finally{e.target.value=''}
 };
 async function calmBatchSave(automatic=false){
- const plan=calmBatchPlan;if(!plan||!plan.length)return;
+ const plan=calmBatchPlan?.filter(p=>p.selected)||[];if(!plan.length)return alert('請至少勾選一張工作表');
  const blocking=plan.filter(p=>!p.people.length||!p.date);
  if(blocking.length){$('batchActivityStatus').textContent='無法匯入：'+blocking.map(p=>p.name+'（'+p.errors.join('、')+'）').join('；');return;}
  const selectedGroup=groupId;
- if(!automatic&&!confirm('確認匯入 '+plan.length+' 張工作表？\n每張表將建立或更新對應活動的參加名單與車次；現有活動未列入的人會改為不參加。'))return;
+ if(!confirm('確認匯入已勾選的 '+plan.length+' 張工作表？\n每張表將建立或更新對應活動的參加名單與車次；現有活動未列入的人會改為不參加。'))return;
  const btn=$('batchActivitySave');if(btn)btn.disabled=true;
  const st=$('batchActivityStatus');let finished=0;
  try{
@@ -1939,14 +1965,14 @@ async function calmBatchSave(automatic=false){
    for(const person of item.people){
     const old=byId.get(String(person.id));
     if(old){if(old.is_participating===false||(old.bus_no||'')!==person.bus){
-     const {error}=await db.from('activity_members').update({is_participating:true,bus_no:person.bus}).eq('id',old.id);if(error)throw error;
+     await calmMemberUpdate({is_participating:true,bus_no:person.bus},{id:old.id});
     }}else inserts.push({group_id:groupId,activity_id:aid,traveler_id:person.id,is_participating:true,bus_no:person.bus});
    }
-   for(let i=0;i<inserts.length;i+=100){const {error}=await db.from('activity_members').insert(inserts.slice(i,i+100));if(error)throw error}
+   for(let i=0;i<inserts.length;i+=100)await calmMemberInsert(inserts.slice(i,i+100));
    finished++;
   }
   calmBatchPlan=null;calmBatchShow();await loadTour();
-  st.textContent=`批次匯入完成！已建立或更新 ${finished} 場活動，活動下拉選單已更新。可再調整各活動 A／B／C 車次。`;
+  st.textContent=`批次匯入完成！已建立或更新 ${finished} 場活動與名單。`+(calmBusColumnUnavailable?' 目前資料庫缺少活動車次欄位，車次未儲存。':'');
   alert(`完成！已建立或更新 ${finished} 場活動與對應參加名單。`);
  }catch(err){st.textContent=`已完成 ${finished}/${plan.length} 場；中途失敗：${err.message}。已完成的活動不會自動復原，請修正後重新匯入。`;alert(st.textContent)}
  finally{if($('batchActivitySave'))$('batchActivitySave').disabled=false}
@@ -1960,8 +1986,8 @@ $('saveActivityPeople').onclick=async()=>{
   for(const p of travelers){
    const wanted=activityDraft.has(p.id);
    const existing=members.find(m=>m.activity_id===activityId&&m.traveler_id===p.id);
-   if(existing){const newBus=wanted?(calmBusDraft.get(String(p.id))??''):(existing.bus_no||'');if((existing.is_participating!==false)!==wanted||(existing.bus_no||'')!==newBus){const {error}=await db.from('activity_members').update({is_participating:wanted,bus_no:newBus}).eq('activity_id',activityId).eq('traveler_id',p.id);if(error)throw error}}
-   else if(wanted){const {error}=await db.from('activity_members').insert({group_id:groupId,activity_id:activityId,traveler_id:p.id,is_participating:true,bus_no:calmBusDraft.get(String(p.id))||''});if(error)throw error}
+   if(existing){const newBus=wanted?(calmBusDraft.get(String(p.id))??''):(existing.bus_no||'');if((existing.is_participating!==false)!==wanted||(existing.bus_no||'')!==newBus){await calmMemberUpdate({is_participating:wanted,bus_no:newBus},{activity_id:activityId,traveler_id:p.id})}}
+   else if(wanted){await calmMemberInsert([{group_id:groupId,activity_id:activityId,traveler_id:p.id,is_participating:true,bus_no:calmBusDraft.get(String(p.id))||''}])}
   }
   closeActivityPicker();await loadActivity();alert('本活動參加名單與車次已儲存');
  }catch(e){alert('儲存失敗：'+e.message+'。請重新整理確認已儲存人員。')}
